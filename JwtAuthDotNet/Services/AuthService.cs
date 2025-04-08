@@ -8,25 +8,35 @@ using Microsoft.IdentityModel.Tokens;
 using System.Diagnostics;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace JwtAuthDotNet.Services
 {
     public class AuthService(AppDbContext context, IConfiguration configuration) : IAuthService
     {
-        public async Task<string?> LoginAsync(UserDto request)
+        public async Task<ResponseTokenDto?> LoginAsync(UserDto request)
         {
             var user = await context.Users.FirstOrDefaultAsync(u => u.UserName == request.UserName);
             if (user is null) return null;
             if (new PasswordHasher<User>().VerifyHashedPassword(user, user.PasswordHash, request.Password)
                 == PasswordVerificationResult.Failed) return null;
+            
+            return await CreateTokenResponse(user);
+        }
 
-            return CreateToken(user);
+        private async Task<ResponseTokenDto> CreateTokenResponse(User? user)
+        {
+            return new ResponseTokenDto
+            {
+                AccessToken = CreateToken(user),
+                RefreshToken = await GenerateAndSaveRefreshTokenAsync(user),
+            };
         }
 
         public async Task<User?> RegisterAsync(UserDto request)
         {
-            if(await context.Users.AnyAsync(u => u.UserName == request.UserName))
+            if (await context.Users.AnyAsync(u => u.UserName == request.UserName))
             {
                 return null;
             }
@@ -42,13 +52,48 @@ namespace JwtAuthDotNet.Services
             return user;
         }
 
+        public async Task<ResponseTokenDto?> RefreshTokenAsync(RefreshTokenRequestDto request)
+        {
+            var user = ValidateRefreshTokenAsync(request.UserId, request.RefreshToken);
+            if (user is null) return null;
+            return await CreateTokenResponse(await user);
+        }
+
+        private async Task<User?> ValidateRefreshTokenAsync (Guid UserId, string RefreshToken)
+        {
+            var user = await context.Users.FindAsync(UserId);
+            if(user is null || user.RefreshToken != RefreshToken || user.RefreshTokenExpiryTime <= DateTime.UtcNow)
+            {
+                return null;
+            }
+            return user;
+        }
+
+        private string GenerateRefreshToken()
+        {
+            var randomNumber = new Byte[32];
+            using var rng = RandomNumberGenerator.Create();
+            rng.GetBytes(randomNumber);
+            return Convert.ToBase64String(randomNumber);
+        }
+
+        private async Task<string> GenerateAndSaveRefreshTokenAsync(User user)
+        {
+            var refreshToken = GenerateRefreshToken();
+            user.RefreshToken = refreshToken;
+            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+            await context.SaveChangesAsync();
+            return refreshToken;
+        }
+
 
         private string CreateToken(User user)
         {
             var claims = new List<Claim>
             {
                 new Claim(ClaimTypes.Name, user.UserName),
-                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString())
+                new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), 
+                new Claim(ClaimTypes.Role, user.Role)
             };
 
             var key = new SymmetricSecurityKey(
@@ -65,5 +110,6 @@ namespace JwtAuthDotNet.Services
 
             return new JwtSecurityTokenHandler().WriteToken(tokenDescriptor);
         }
+        
     }
 }

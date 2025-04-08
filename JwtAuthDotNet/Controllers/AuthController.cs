@@ -1,6 +1,7 @@
 ﻿using JwtAuthDotNet.Entities;
 using JwtAuthDotNet.Models;
 using JwtAuthDotNet.Services;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
@@ -27,12 +28,35 @@ namespace JwtAuthDotNet.Controllers
         }
 
         [HttpPost("login")]
-        public async Task<ActionResult<string>> Login(UserDto request)
+        public async Task<ActionResult<ResponseTokenDto>> Login(UserDto request)
         {
-            var token = await authService.LoginAsync(request);
-            if (token is null) return BadRequest("User name or password is incorrect");
+            var result = await authService.LoginAsync(request);
+            if (result is null) return BadRequest("User name or password is incorrect");
                         
-            return Ok(token);
+            return Ok(result);
+        }
+
+        [HttpPost("refresh-token")]
+        public async Task<ActionResult<ResponseTokenDto>> RefreshToken(RefreshTokenRequestDto request)
+        {
+            var result = await authService.RefreshTokenAsync(request);
+            if (result == null || result.AccessToken == null || result.RefreshToken == null) return Unauthorized("Invalid refresh token.");
+            return Ok(result);
+        }
+
+
+        [Authorize]
+        [HttpGet]
+        public IActionResult AuthenticatedOnlyEndpoint()
+        {
+            return Ok("You are authenticated.");
+        }
+
+        [Authorize(Roles = "Admin")]
+        [HttpGet("admin-only")]
+        public IActionResult AuthenticatedEndpoint()
+        {
+            return Ok("you are admin and authenticated.");
         }
         
     }
